@@ -1,20 +1,30 @@
 #include "d3d11_variable_rate_shading.h"
 #include "config.h"
 #include "logging.h"
+#include <Magick++.h>
+
+#define SHADING_RATE_1x1 0
+#define SHADING_RATE_1x2 1
+#define SHADING_RATE_2x1 2
+#define SHADING_RATE_2x2 3
+#define SHADING_RATE_2x4 4
+#define SHADING_RATE_4x2 5
+#define SHADING_RATE_4x4 6
 
 namespace vrperfkit {
 	uint8_t DistanceToVRSLevel(float distance) {
 		if (distance < g_config.ffr.innerRadius) {
-			return 0;
+			return SHADING_RATE_1x1;
 		}
 		if (distance < g_config.ffr.midRadius) {
-			return 1;
+			return SHADING_RATE_1x2;
 		}
 		if (distance < g_config.ffr.outerRadius) {
-			return 2;
+			return SHADING_RATE_2x2;
 		}
-		return 3;
+		return SHADING_RATE_4x4;
 	}
+
 
 	std::vector<uint8_t> CreateCombinedFixedFoveatedVRSPattern( int width, int height, float leftProjX, float leftProjY, float rightProjX, float rightProjY ) {
 		std::vector<uint8_t> data (width * height);
@@ -34,7 +44,54 @@ namespace vrperfkit {
 				data[y * width + x] = DistanceToVRSLevel(distance);
 			}
 		}
+		return data;
+	}
+	// Open from image file supported by imagemagick library
+	std::vector<uint8_t> CreateCombinedFixedFoveatedVRSPattern(int width, int height, std::string path) {
+		std::vector<uint8_t> data (width * height);
 
+		LOG_INFO << "Custom VRS: Open image file using ImageMagick: " << path;
+
+		try {
+			Magick::Image imgPattern;
+			Magick::Image palette;
+			palette.read("pal.gif");
+			imgPattern.read(path);
+			imgPattern.scale(Magick::Geometry(width, height));
+			imgPattern.map(palette);
+			imgPattern.write("out.png");
+			int imgWidth = imgPattern.columns();
+			int imgHeight = imgPattern.rows();
+			LOG_INFO << "Custom VRS: image size " << imgWidth << "x" << imgHeight;
+
+			imgPattern.modifyImage();
+			for (int row = 0; row < imgHeight; row++) {
+				for (int column = 0; column < imgWidth; column++) {
+					Magick::ColorRGB px = imgPattern.pixelColor(column, row);
+					int red = px.red();
+					int blue = px.blue();
+					int green = px.green();
+					if (red && !green && !blue)
+						data[row * width + column] = SHADING_RATE_1x1;
+					else if (!red && green && !blue)
+						data[row * width + column] = SHADING_RATE_2x2;
+					else if (!red && !green && blue)
+						data[row * width + column] = SHADING_RATE_1x2;
+					else if (red && !green && blue)
+						data[row * width + column] = SHADING_RATE_2x1;
+					else if (red && green && !blue)
+						data[row * width + column] = SHADING_RATE_2x4;
+					else if (!red && green && blue)
+						data[row * width + column] = SHADING_RATE_4x2;
+					else
+						data[row * width + column] = SHADING_RATE_4x4;
+				}
+			}
+		}
+		catch (Magick::Exception &error) {
+			LOG_ERROR << "Caught error" << error.what();
+		}
+		LOG_INFO << "Created VRS Pattern from File " << path << " with length " << data.size();
 		return data;
 	}
 
@@ -226,8 +283,11 @@ namespace vrperfkit {
 			memset(vsrd[i].shadingRateTable, 5, sizeof(vsrd[i].shadingRateTable));
 			vsrd[i].shadingRateTable[0] = NV_PIXEL_X1_PER_RASTER_PIXEL;
 			vsrd[i].shadingRateTable[1] = NV_PIXEL_X1_PER_1X2_RASTER_PIXELS;
-			vsrd[i].shadingRateTable[2] = NV_PIXEL_X1_PER_2X2_RASTER_PIXELS;
-			vsrd[i].shadingRateTable[3] = NV_PIXEL_X1_PER_4X4_RASTER_PIXELS;
+			vsrd[i].shadingRateTable[2] = NV_PIXEL_X1_PER_2X1_RASTER_PIXELS;
+			vsrd[i].shadingRateTable[3] = NV_PIXEL_X1_PER_2X2_RASTER_PIXELS;
+			vsrd[i].shadingRateTable[4] = NV_PIXEL_X1_PER_2X4_RASTER_PIXELS;
+			vsrd[i].shadingRateTable[5] = NV_PIXEL_X1_PER_4X2_RASTER_PIXELS;
+			vsrd[i].shadingRateTable[6] = NV_PIXEL_X1_PER_4X4_RASTER_PIXELS;
 		}
 		NV_D3D11_VIEWPORTS_SHADING_RATE_DESC srd;
 		srd.version = NV_D3D11_VIEWPORTS_SHADING_RATE_DESC_VER;
