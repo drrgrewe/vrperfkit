@@ -24,10 +24,13 @@ namespace vrperfkit {
 
 	struct FixedFoveatedConfig {
 		bool enabled = false;
+		bool pattern = true;
+		float patternScale = 1.0;
 		FixedFoveatedMethod method = FixedFoveatedMethod::VRS;
 		float innerRadius = 0.6f;
 		float midRadius = 0.8f;
 		float outerRadius = 1.0f;
+		std::string patternFilePath = "singlePattern.png";
 	};
 
 	struct Config {

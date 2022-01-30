@@ -90,6 +90,9 @@ namespace vrperfkit {
 			YAML::Node ffrCfg = cfg["fixedFoveated"];
 			FixedFoveatedConfig &ffr = g_config.ffr;
 			ffr.enabled = ffrCfg["enabled"].as<bool>(ffr.enabled);
+			ffr.pattern = ffrCfg["pattern"].as<bool>(ffr.pattern);
+			ffr.patternFilePath = ffrCfg["patternFilePath"].as<std::string>(ffr.patternFilePath);
+			ffr.patternScale = ffrCfg["patternScale"].as<float>(ffr.patternScale);
 			ffr.innerRadius = ffrCfg["innerRadius"].as<float>(ffr.innerRadius);
 			ffr.midRadius = ffrCfg["midRadius"].as<float>(ffr.midRadius);
 			ffr.outerRadius = ffrCfg["outerRadius"].as<float>(ffr.outerRadius);

@@ -3,13 +3,15 @@
 #include "logging.h"
 #include <Magick++.h>
 
-#define SHADING_RATE_1x1 0
-#define SHADING_RATE_1x2 1
-#define SHADING_RATE_2x1 2
-#define SHADING_RATE_2x2 3
-#define SHADING_RATE_2x4 4
-#define SHADING_RATE_4x2 5
-#define SHADING_RATE_4x4 6
+//							  RGB
+#define SHADING_RATE_4x4 0 // 000
+#define SHADING_RATE_1x1 1 // 001
+#define SHADING_RATE_1x2 2 // 010
+#define SHADING_RATE_2x1 3 // 011
+#define SHADING_RATE_2x2 4 // 100
+#define SHADING_RATE_2x4 5 // 101
+#define SHADING_RATE_4x2 6 // 110
+//#define SHADING_RATE_4x4 7 // 111
 
 namespace vrperfkit {
 	uint8_t DistanceToVRSLevel(float distance) {
@@ -25,8 +27,16 @@ namespace vrperfkit {
 		return SHADING_RATE_4x4;
 	}
 
+	uint8_t ColorToVRSLevel(Magick::ColorRGB px) {
+		uint8_t red = int(px.red()) *4;
+		uint8_t green = int(px.green()) *2;
+		uint8_t blue = int(px.blue());
+		
+		return red + green + blue;
+	}
+	
 
-	std::vector<uint8_t> CreateCombinedFixedFoveatedVRSPattern( int width, int height, float leftProjX, float leftProjY, float rightProjX, float rightProjY ) {
+	std::vector<uint8_t> CreateCombinedFixedFoveatedVRSPatternFromRadii( int width, int height, float leftProjX, float leftProjY, float rightProjX, float rightProjY ) {
 		std::vector<uint8_t> data (width * height);
 		int halfWidth = width / 2;
 
@@ -46,55 +56,79 @@ namespace vrperfkit {
 		}
 		return data;
 	}
+	
 	// Open from image file supported by imagemagick library
-	std::vector<uint8_t> CreateCombinedFixedFoveatedVRSPattern(int width, int height, std::string path) {
+	std::vector<uint8_t> CreateCombinedFixedFoveatedVRSPatternFromFile(int width, int height, float leftProjX, float leftProjY, float rightProjX, float rightProjY) {
 		std::vector<uint8_t> data (width * height);
 
-		LOG_INFO << "Custom VRS: Open image file using ImageMagick: " << path;
+		LOG_INFO << "Custom VRS: Open image file using ImageMagick: " << g_config.ffr.patternFilePath;
 
 		try {
-			Magick::Image imgPattern;
+			// Loading color palette
 			Magick::Image palette;
 			palette.read("pal.gif");
-			imgPattern.read(path);
-			imgPattern.scale(Magick::Geometry(width, height));
-			imgPattern.map(palette);
-			imgPattern.write("out.png");
+			// loading pattern image
+			Magick::Image imgPattern;
+			imgPattern.read(g_config.ffr.patternFilePath);
+			imgPattern.modifyImage();
+
+			// scale the pattern image
+			Magick::Geometry to_size(100 * g_config.ffr.patternScale, 100 * g_config.ffr.patternScale);
+			to_size.percent(true);
+			imgPattern.scale( to_size );
+			imgPattern.map(palette); // only use colors defined in palette
 			int imgWidth = imgPattern.columns();
 			int imgHeight = imgPattern.rows();
+			LOG_INFO << "Custom VRS: pattern image scaled size " << imgWidth << "x" << imgHeight;
+
+			// Create background image;
+			Magick::Image VRSPattern(Magick::Geometry(width, height), "white"); 
+			VRSPattern.modifyImage();
+
+			// Calculate Left Eye Offset (Top Left corner)
+			int xOffset = int( 0 + leftProjX * width * 0.5 - 0.5*imgWidth);
+			int yOffset = int( leftProjY * height - 0.5*imgWidth );
+			Magick::Geometry leftOffset(0, 0, xOffset, yOffset);
+			LOG_INFO << "Custom VRS: LeftEye Offset: " << xOffset << "x" << yOffset;
+
+			// Calculate Right Eye Offset (Top Left corner)
+			xOffset = int(width*0.5 + rightProjX * width * 0.5 - 0.5*imgWidth);
+			Magick::Geometry rightOffset(0, 0, xOffset, yOffset);
+			LOG_INFO << "Custom VRS: RightEye Offset: " << xOffset << "x" << yOffset;
+
+			// Compose final image. Right eye image is flipped horizontal (flop)
+			VRSPattern.composite(imgPattern, leftOffset, MagickCore::OverCompositeOp);
+			imgPattern.flop();
+			VRSPattern.composite(imgPattern, rightOffset, MagickCore::OverCompositeOp);
+			
+			// Write final pattern image for debugging
+			VRSPattern.write("out.png");
+
+			imgWidth = VRSPattern.columns();
+			imgHeight = VRSPattern.rows();
 			LOG_INFO << "Custom VRS: image size " << imgWidth << "x" << imgHeight;
 
-			imgPattern.modifyImage();
 			for (int row = 0; row < imgHeight; row++) {
 				for (int column = 0; column < imgWidth; column++) {
-					Magick::ColorRGB px = imgPattern.pixelColor(column, row);
-					int red = px.red();
-					int blue = px.blue();
-					int green = px.green();
-					if (red && !green && !blue)
-						data[row * width + column] = SHADING_RATE_1x1;
-					else if (!red && green && !blue)
-						data[row * width + column] = SHADING_RATE_2x2;
-					else if (!red && !green && blue)
-						data[row * width + column] = SHADING_RATE_1x2;
-					else if (red && !green && blue)
-						data[row * width + column] = SHADING_RATE_2x1;
-					else if (red && green && !blue)
-						data[row * width + column] = SHADING_RATE_2x4;
-					else if (!red && green && blue)
-						data[row * width + column] = SHADING_RATE_4x2;
-					else
-						data[row * width + column] = SHADING_RATE_4x4;
+					data[row * width + column] = ColorToVRSLevel(VRSPattern.pixelColor(column, row));
+					LOG_INFO << int(data[row * width + column]) << ",";
 				}
 			}
 		}
 		catch (Magick::Exception &error) {
-			LOG_ERROR << "Caught error" << error.what();
+			LOG_ERROR << "Caught Imagemagick error: " << error.what();
 		}
-		LOG_INFO << "Created VRS Pattern from File " << path << " with length " << data.size();
+		LOG_INFO << "Created VRS Pattern from File " << g_config.ffr.patternFilePath << " with length " << data.size();
 		return data;
 	}
-
+	std::vector<uint8_t> CreateCombinedFixedFoveatedVRSPattern(int width, int height, float leftProjX, float leftProjY, float rightProjX, float rightProjY) {
+		if (g_config.ffr.pattern) {
+			return CreateCombinedFixedFoveatedVRSPatternFromFile(width, height, leftProjX, leftProjY, rightProjX, rightProjY);
+		}
+		else {
+			return CreateCombinedFixedFoveatedVRSPatternFromRadii(width, height, leftProjX, leftProjY, rightProjX, rightProjY);
+		}
+	}
 	std::vector<uint8_t> CreateSingleEyeFixedFoveatedVRSPattern( int width, int height, float projX, float projY ) {
 		std::vector<uint8_t> data (width * height);
 
@@ -280,14 +314,15 @@ namespace vrperfkit {
 		NV_D3D11_VIEWPORT_SHADING_RATE_DESC vsrd[2];
 		for (int i = 0; i < 2; ++i) {
 			vsrd[i].enableVariablePixelShadingRate = true;
-			memset(vsrd[i].shadingRateTable, 5, sizeof(vsrd[i].shadingRateTable));
-			vsrd[i].shadingRateTable[0] = NV_PIXEL_X1_PER_RASTER_PIXEL;
-			vsrd[i].shadingRateTable[1] = NV_PIXEL_X1_PER_1X2_RASTER_PIXELS;
-			vsrd[i].shadingRateTable[2] = NV_PIXEL_X1_PER_2X1_RASTER_PIXELS;
-			vsrd[i].shadingRateTable[3] = NV_PIXEL_X1_PER_2X2_RASTER_PIXELS;
-			vsrd[i].shadingRateTable[4] = NV_PIXEL_X1_PER_2X4_RASTER_PIXELS;
-			vsrd[i].shadingRateTable[5] = NV_PIXEL_X1_PER_4X2_RASTER_PIXELS;
-			vsrd[i].shadingRateTable[6] = NV_PIXEL_X1_PER_4X4_RASTER_PIXELS;
+			memset(vsrd[i].shadingRateTable, 5, sizeof(vsrd[i].shadingRateTable));//RGB
+			vsrd[i].shadingRateTable[0] = NV_PIXEL_X1_PER_4X4_RASTER_PIXELS;	//  000
+			vsrd[i].shadingRateTable[1] = NV_PIXEL_X1_PER_RASTER_PIXEL;			//  001
+			vsrd[i].shadingRateTable[2] = NV_PIXEL_X1_PER_1X2_RASTER_PIXELS;	//  010
+			vsrd[i].shadingRateTable[3] = NV_PIXEL_X1_PER_2X1_RASTER_PIXELS;	//  011
+			vsrd[i].shadingRateTable[4] = NV_PIXEL_X1_PER_2X2_RASTER_PIXELS;	//  100
+			vsrd[i].shadingRateTable[5] = NV_PIXEL_X1_PER_2X4_RASTER_PIXELS;	//  101
+			vsrd[i].shadingRateTable[6] = NV_PIXEL_X1_PER_4X2_RASTER_PIXELS;	//  110
+			vsrd[i].shadingRateTable[7] = NV_PIXEL_X1_PER_4X4_RASTER_PIXELS;	//  111 
 		}
 		NV_D3D11_VIEWPORTS_SHADING_RATE_DESC srd;
 		srd.version = NV_D3D11_VIEWPORTS_SHADING_RATE_DESC_VER;
